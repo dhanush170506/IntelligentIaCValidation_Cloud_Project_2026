@@ -133,6 +133,36 @@ def read_terraform_file(file_path: str) -> str:
         raise TerraformParserError(f"Unable to read file: {path}") from exc
 
 
+def _normalize_terraform_value(value: Any) -> Any:
+    """
+    Recursively normalize values returned by python-hcl2.
+
+    Removes parser-added surrounding double quotes from string literals
+    while preserving Terraform expressions such as ${...}.
+    """
+    if isinstance(value, str):
+        # Preserve Terraform interpolation expressions.
+        if value.startswith("${") and value.endswith("}"):
+            return value
+
+        # Remove only one pair of surrounding double quotes.
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            return value[1:-1]
+
+        return value
+
+    if isinstance(value, list):
+        return [_normalize_terraform_value(item) for item in value]
+
+    if isinstance(value, dict):
+        return {
+            _normalize_terraform_value(key): _normalize_terraform_value(val)
+            for key, val in value.items()
+        }
+
+    return value
+
+
 def parse_terraform_content(content: str, source_name: str = "<string>") -> Dict[str, Any]:
     """
     Parse raw Terraform (HCL2) content into a Python dictionary.
@@ -156,6 +186,7 @@ def parse_terraform_content(content: str, source_name: str = "<string>") -> Dict
         import io
 
         parsed_data: Dict[str, Any] = hcl2.load(io.StringIO(content))
+        parsed_data = _normalize_terraform_value(parsed_data)
         logger.info("Successfully parsed Terraform content from: %s", source_name)
         return parsed_data
     except Exception as exc:

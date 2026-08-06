@@ -27,18 +27,18 @@ import logging
 from pathlib import Path
 from typing import Any, Dict
 
-from cloudformation_parser import (
+from .cloudformation_parser import (
     CloudFormationParserError,
     parse_cloudformation_file,
 )
-from dependency_extractor import DependencyExtractorError, extract_dependencies
-from json_normalizer import (
+from .dependency_extractor import DependencyExtractorError, extract_dependencies
+from .json_normalizer import (
     JSONNormalizerError,
     normalize_json,
     validate_normalized_json,
 )
-from resource_extractor import ResourceExtractorError, extract_resources
-from terraform_parser import TerraformParserError, parse_terraform_file
+from .resource_extractor import ResourceExtractorError, extract_resources
+from .terraform_parser import TerraformParserError, parse_terraform_file
 
 # ---------------------------------------------------------------------------
 # Logging configuration

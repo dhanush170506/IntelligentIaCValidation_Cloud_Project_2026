@@ -328,12 +328,12 @@ def main() -> None:
 
     try:
         if file_path.endswith(".tf"):
-            from terraform_parser import parse_terraform_file
+            from .terraform_parser import parse_terraform_file
 
             parsed_data = parse_terraform_file(file_path)
             resources = extract_resources(parsed_data, provider=_PROVIDER_TERRAFORM)
         elif file_path.endswith((".yaml", ".yml", ".json")):
-            from cloudformation_parser import parse_cloudformation_file
+            from .cloudformation_parser import parse_cloudformation_file
 
             parsed_data = parse_cloudformation_file(file_path)
             resources = extract_resources(

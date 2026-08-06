@@ -379,16 +379,16 @@ def main() -> None:
     file_path = sys.argv[1]
 
     try:
-        from dependency_extractor import extract_dependencies
-        from resource_extractor import extract_resources
+        from .dependency_extractor import extract_dependencies
+        from .resource_extractor import extract_resources
 
         if file_path.endswith(".tf"):
-            from terraform_parser import parse_terraform_file
+            from .terraform_parser import parse_terraform_file
 
             provider = "Terraform"
             parsed_data = parse_terraform_file(file_path)
         elif file_path.endswith((".yaml", ".yml", ".json")):
-            from cloudformation_parser import parse_cloudformation_file
+            from .cloudformation_parser import parse_cloudformation_file
 
             provider = "CloudFormation"
             parsed_data = parse_cloudformation_file(file_path)
