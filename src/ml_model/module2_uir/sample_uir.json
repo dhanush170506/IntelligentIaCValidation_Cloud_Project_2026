@@ -68,11 +68,45 @@
         }
     ],
     "dependencies": [
-        {
-            "source": "aws_instance.web_server",
-            "target": "aws_security_group.web_sg",
-            "relationship": "depends_on",
-            "provider": "Terraform"
-        }
-    ]
+    {
+        "source": "aws_instance.web_server",
+        "target": "aws_security_group.web_sg",
+        "relationship": "depends_on",
+        "provider": "Terraform"
+    }
+    ],
+    "graph": {
+        "nodes": [
+            {
+                "id": "aws_security_group.web_sg",
+                "provider": "Terraform",
+                "type": "aws_security_group",
+                "canonical_type": "security_group",
+                "name": "web_sg",
+                "properties": {
+                    "name": "web-sg",
+                    "description": "Allow HTTP and SSH inbound traffic"
+                }
+            },
+            {
+                "id": "aws_instance.web_server",
+                "provider": "Terraform",
+                "type": "aws_instance",
+                "canonical_type": "compute_instance",
+                "name": "web_server",
+                "properties": {
+                    "ami": "ami-0c55b159cbfafe1f",
+                    "instance_type": "t3.micro"
+                }
+            }
+        ],
+        "edges": [
+            {
+                "source": "aws_instance.web_server",
+                "target": "aws_security_group.web_sg",
+                "relationship": "depends_on",
+                "provider": "Terraform"
+            }
+        ]
+    }
 }

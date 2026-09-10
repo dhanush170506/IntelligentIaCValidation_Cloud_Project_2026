@@ -39,6 +39,7 @@ from typing import Any, Dict
 try:
     from .uir_schema import UIRSchemaError, build_uir
     from .uir_validator import UIRValidationError, validate_uir
+    from .graph_builder import GraphBuilder, GraphBuilderError
     from ..module1_iac_parser.parser_manager import (
         ParserManagerError,
         process_iac_file,
@@ -46,6 +47,7 @@ try:
 except ImportError:
     from uir_schema import UIRSchemaError, build_uir  # type: ignore[no-redef]
     from uir_validator import UIRValidationError, validate_uir  # type: ignore[no-redef]
+    from graph_builder import GraphBuilder, GraphBuilderError  # type: ignore[no-redef]
     from parser_manager import (  # type: ignore[no-redef]
         ParserManagerError,
         process_iac_file,
@@ -131,13 +133,26 @@ def process_to_uir(file_path: str) -> Dict[str, Any]:
         logger.info("Building UIR for file: %s", file_path)
         uir = build_uir(normalized_json)
 
-        logger.info("Validating UIR for file: %s", file_path)
+        logger.info("Validating base UIR for file: %s", file_path)
         validate_uir(uir)
 
-        logger.info("Completed Module 2 for file: %s", file_path)
+        logger.info("Building resource dependency graph for file: %s", file_path)
+        graph_builder = GraphBuilder()
+        uir = graph_builder.attach_graph(uir)
+
+        logger.info("Validating final UIR with resource graph for file: %s", file_path)
+        validate_uir(uir)
+
+        logger.info(
+            "Completed Module 2 for file: %s (nodes=%d, edges=%d)",
+            file_path,
+            len(uir["graph"]["nodes"]),
+            len(uir["graph"]["edges"]),
+        )
+
         return uir
 
-    except (ParserManagerError, UIRSchemaError, UIRValidationError) as exc:
+    except (ParserManagerError, UIRSchemaError, UIRValidationError, GraphBuilderError) as exc:
         logger.error("Module 2 failed for file %s: %s", file_path, exc)
         raise
 
@@ -166,7 +181,7 @@ def main() -> None:
     try:
         uir = process_to_uir(file_path)
         print(json.dumps(uir, indent=4))
-    except (ParserManagerError, UIRSchemaError, UIRValidationError, Module2ManagerError) as exc:
+    except (ParserManagerError, UIRSchemaError, UIRValidationError, GraphBuilderError, Module2ManagerError) as exc:
         logger.error("Module 2 processing failed: %s", exc)
         sys.exit(1)
 

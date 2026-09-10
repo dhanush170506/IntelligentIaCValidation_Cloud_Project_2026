@@ -81,6 +81,10 @@ class UIRValidationError(Exception):
 # validates.
 _KEY_CANONICAL_TYPE = "canonical_type"
 
+_KEY_GRAPH = "graph"
+_KEY_GRAPH_NODES = "nodes"
+_KEY_GRAPH_EDGES = "edges"
+
 # ---------------------------------------------------------------------------
 # Required key sets, declared once so they are never repeated as
 # literal lists elsewhere in this module.
@@ -371,6 +375,187 @@ def _validate_counts_match(
             f"dependency count ({len(dependencies)})"
         )
 
+def _validate_graph(graph: Any, resources: List[Any]) -> None:
+    """Validate the optional resource graph section of the UIR.
+
+    Args:
+        graph: The graph section to validate.
+        resources: The validated UIR resource list.
+
+    Raises:
+        UIRValidationError: If the graph structure is malformed or
+            inconsistent with the UIR resources.
+    """
+    if not isinstance(graph, dict):
+        raise UIRValidationError(
+            f"'graph' must be a dict, got {type(graph).__name__}"
+        )
+
+    if _KEY_GRAPH_NODES not in graph:
+        raise UIRValidationError(
+            "'graph' is missing required key: 'nodes'"
+        )
+
+    if _KEY_GRAPH_EDGES not in graph:
+        raise UIRValidationError(
+            "'graph' is missing required key: 'edges'"
+        )
+
+    nodes = graph[_KEY_GRAPH_NODES]
+    edges = graph[_KEY_GRAPH_EDGES]
+
+    if not isinstance(nodes, list):
+        raise UIRValidationError(
+            f"'graph.nodes' must be a list, got {type(nodes).__name__}"
+        )
+
+    if not isinstance(edges, list):
+        raise UIRValidationError(
+            f"'graph.edges' must be a list, got {type(edges).__name__}"
+        )
+
+    resource_ids = set()
+
+    for index, resource in enumerate(resources):
+        resource_ids.add(resource[KEY_RESOURCE_ID])
+
+    graph_node_ids = set()
+
+    for index, node in enumerate(nodes):
+        context = f"graph node at index {index}"
+
+        if not isinstance(node, dict):
+            raise UIRValidationError(
+                f"{context} is not a dict: {node!r}"
+            )
+
+        required_node_keys = (
+            KEY_RESOURCE_ID,
+            KEY_PROVIDER,
+            KEY_RESOURCE_TYPE,
+            _KEY_CANONICAL_TYPE,
+            KEY_RESOURCE_NAME,
+            KEY_PROPERTIES,
+        )
+
+        missing_keys = [
+            key for key in required_node_keys
+            if key not in node
+        ]
+
+        if missing_keys:
+            raise UIRValidationError(
+                f"{context} is missing required keys: {missing_keys}"
+            )
+
+        _require_non_empty_string(
+            node[KEY_RESOURCE_ID],
+            KEY_RESOURCE_ID,
+            context,
+        )
+
+        _require_non_empty_string(
+            node[KEY_PROVIDER],
+            KEY_PROVIDER,
+            context,
+        )
+
+        _require_non_empty_string(
+            node[KEY_RESOURCE_TYPE],
+            KEY_RESOURCE_TYPE,
+            context,
+        )
+
+        _require_non_empty_string(
+            node[_KEY_CANONICAL_TYPE],
+            _KEY_CANONICAL_TYPE,
+            context,
+        )
+
+        _require_non_empty_string(
+            node[KEY_RESOURCE_NAME],
+            KEY_RESOURCE_NAME,
+            context,
+        )
+
+        if not isinstance(node[KEY_PROPERTIES], dict):
+            raise UIRValidationError(
+                f"{context}: field '{KEY_PROPERTIES}' must be a dict"
+            )
+
+        node_id = node[KEY_RESOURCE_ID]
+
+        if node_id in graph_node_ids:
+            raise UIRValidationError(
+                f"{context}: duplicate graph node id: {node_id!r}"
+            )
+
+        graph_node_ids.add(node_id)
+
+    if graph_node_ids != resource_ids:
+        missing_from_graph = sorted(resource_ids - graph_node_ids)
+        extra_in_graph = sorted(graph_node_ids - resource_ids)
+
+        raise UIRValidationError(
+            "Graph node IDs do not match UIR resource IDs. "
+            f"Missing from graph: {missing_from_graph}; "
+            f"Extra in graph: {extra_in_graph}"
+        )
+
+    for index, edge in enumerate(edges):
+        context = f"graph edge at index {index}"
+
+        if not isinstance(edge, dict):
+            raise UIRValidationError(
+                f"{context} is not a dict: {edge!r}"
+            )
+
+        required_edge_keys = (
+            KEY_SOURCE,
+            KEY_TARGET,
+            KEY_RELATIONSHIP,
+            KEY_PROVIDER,
+        )
+
+        missing_keys = [
+            key for key in required_edge_keys
+            if key not in edge
+        ]
+
+        if missing_keys:
+            raise UIRValidationError(
+                f"{context} is missing required keys: {missing_keys}"
+            )
+
+        for field_name in required_edge_keys:
+            _require_non_empty_string(
+                edge[field_name],
+                field_name,
+                context,
+            )
+
+        if edge[KEY_SOURCE] == edge[KEY_TARGET]:
+            raise UIRValidationError(
+                f"{context}: source and target cannot be identical"
+            )
+
+        if edge[KEY_SOURCE] not in graph_node_ids:
+            raise UIRValidationError(
+                f"{context}: source node does not exist: "
+                f"{edge[KEY_SOURCE]!r}"
+            )
+
+        if edge[KEY_TARGET] not in graph_node_ids:
+            raise UIRValidationError(
+                f"{context}: target node does not exist: "
+                f"{edge[KEY_TARGET]!r}"
+            )
+
+    logger.info(
+        "Graph validation succeeded (nodes=%d, edges=%d)",
+        len(nodes),
+        len(edges),
+    )
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -406,6 +591,11 @@ def validate_uir(uir: Dict[str, Any]) -> None:
     _validate_resources(uir[KEY_RESOURCES])
     _validate_dependencies(uir[KEY_DEPENDENCIES])
     _validate_counts_match(uir[KEY_METADATA], uir[KEY_RESOURCES], uir[KEY_DEPENDENCIES])
+    if _KEY_GRAPH in uir:
+        _validate_graph(
+            uir[_KEY_GRAPH],
+            uir[KEY_RESOURCES],
+        )
 
     logger.info(
         "UIR validation succeeded for provider: %s (resources=%d, dependencies=%d)",
