@@ -13,6 +13,7 @@ import {
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/validate', label: 'New Validation', icon: UploadCloud },
+  { to: '/dataset-evaluation', label: 'Dataset Evaluation', icon: ShieldCheck },
   { to: '/history', label: 'History', icon: History },
   { to: '/projects', label: 'Projects', icon: FolderGit2 },
   { to: '/profile', label: 'Profile', icon: User },

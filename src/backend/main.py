@@ -12,6 +12,7 @@ from .routes.validation import router as validation_router
 from .routes.reports import router as reports_router
 from .routes.history import router as history_router
 from .routes.dashboard import router as dashboard_router
+from .routes.dataset_evaluation import router as dataset_evaluation_router
 
 
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +52,7 @@ app.include_router(validation_router)
 app.include_router(reports_router)
 app.include_router(history_router)
 app.include_router(dashboard_router)
+app.include_router(dataset_evaluation_router)
 
 
 @app.exception_handler(HTTPException)

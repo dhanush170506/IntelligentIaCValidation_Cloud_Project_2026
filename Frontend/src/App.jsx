@@ -5,6 +5,7 @@ import DashboardPage from './pages/DashboardPage.jsx';
 import ValidatePage from './pages/ValidatePage.jsx';
 import ValidationReportPage from './pages/ValidationReportPage.jsx';
 import HistoryPage from './pages/HistoryPage.jsx';
+import DatasetEvaluationPage from './pages/DatasetEvaluationPage.jsx';
 import ProjectsPage from './pages/ProjectsPage.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import LoginPage from './pages/LoginPage.jsx';
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/validate" element={<ValidatePage />} />
         <Route path="/validation/:id" element={<ValidationReportPage />} />
+        <Route path="/dataset-evaluation" element={<DatasetEvaluationPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/profile" element={<ProfilePage />} />

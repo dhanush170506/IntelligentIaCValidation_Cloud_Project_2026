@@ -34,40 +34,58 @@ def _serialize_summary(report: dict) -> dict:
 
 @router.get("/dashboard")
 async def get_dashboard_summary():
-    """Return aggregate statistics from validation_reports for the frontend dashboard."""
+    """Return aggregate statistics from validation reports and dataset evaluations."""
     try:
         db = get_database()
-        collection = db["validation_reports"]
+        validation_collection = db["validation_reports"]
+        dataset_runs_collection = db["dataset_evaluation_runs"]
 
-        total_validations = collection.count_documents({})
+        total_validations = validation_collection.count_documents({})
+        passed = validation_collection.count_documents({"status": "PASS"})
+        failed = validation_collection.count_documents({"status": "FAIL"})
+        review_required = validation_collection.count_documents({"status": "REVIEW_REQUIRED"})
 
-        passed = collection.count_documents({"status": "PASS"})
-        failed = collection.count_documents({"status": "FAIL"})
-        review_required = collection.count_documents({"status": "REVIEW_REQUIRED"})
-
-        # Average security_score from documents where it's a valid number
         sec_pipeline = [
             {"$match": {"security_score": {"$type": "number"}}},
             {"$group": {"_id": None, "avg": {"$avg": "$security_score"}}},
         ]
-        sec_result = list(collection.aggregate(sec_pipeline))
-        average_security_score = (
-            round(sec_result[0]["avg"], 1) if sec_result else 0
-        )
+        sec_result = list(validation_collection.aggregate(sec_pipeline))
+        average_security_score = round(sec_result[0]["avg"], 1) if sec_result else None
 
-        # Average drift_score from documents where it's a valid number
         drift_pipeline = [
             {"$match": {"drift_score": {"$type": "number"}}},
             {"$group": {"_id": None, "avg": {"$avg": "$drift_score"}}},
         ]
-        drift_result = list(collection.aggregate(drift_pipeline))
-        average_drift_score = (
-            round(drift_result[0]["avg"], 1) if drift_result else 0
-        )
+        drift_result = list(validation_collection.aggregate(drift_pipeline))
+        average_drift_score = round(drift_result[0]["avg"], 1) if drift_result else None
 
-        # 5 most recent validations
+        confidence_pipeline = [
+            {"$match": {"confidence": {"$type": "number"}}},
+            {"$group": {"_id": None, "avg": {"$avg": "$confidence"}}},
+        ]
+        confidence_result = list(validation_collection.aggregate(confidence_pipeline))
+        average_confidence = round(confidence_result[0]["avg"], 4) if confidence_result else None
+
+        dataset_runs = list(
+            dataset_runs_collection.find({}, {"_id": 0, "run_id": 1, "dataset_name": 1, "status": 1, "samples_processed": 1, "aggregate_metrics": 1, "started_at": 1, "completed_at": 1})
+            .sort("started_at", -1)
+            .limit(10)
+        )
+        for run in dataset_runs:
+            for key, value in list(run.items()):
+                if isinstance(value, datetime):
+                    run[key] = value.isoformat()
+
+        dataset_evaluations = dataset_runs_collection.count_documents({})
+        total_samples_processed = sum(int(run.get("samples_processed") or 0) for run in dataset_runs)
+        validation_distribution = {
+            "pass": passed,
+            "fail": failed,
+            "review_required": review_required,
+        }
+
         recent_cursor = (
-            collection.find({}, RECENT_FIELDS)
+            validation_collection.find({}, RECENT_FIELDS)
             .sort("created_at", -1)
             .limit(5)
         )
@@ -80,7 +98,12 @@ async def get_dashboard_summary():
             "review_required": review_required,
             "average_security_score": average_security_score,
             "average_drift_score": average_drift_score,
+            "average_confidence": average_confidence,
+            "total_dataset_evaluations": dataset_evaluations,
+            "total_samples_processed": total_samples_processed,
+            "validation_distribution": validation_distribution,
             "recent_validations": recent_validations,
+            "recent_dataset_runs": dataset_runs,
         }
 
     except PyMongoError as exc:

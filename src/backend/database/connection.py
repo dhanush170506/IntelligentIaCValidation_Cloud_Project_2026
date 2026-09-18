@@ -13,6 +13,8 @@ COLLECTION_NAMES: List[str] = [
     "projects",
     "uploads",
     "validation_reports",
+    "dataset_evaluation_runs",
+    "dataset_evaluation_results",
 ]
 
 _client: Optional[MongoClient] = None
