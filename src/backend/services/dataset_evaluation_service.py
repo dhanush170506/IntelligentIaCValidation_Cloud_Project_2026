@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.ml_model.assurance_pipeline.fixture_conditions import (
+    SCENARIO_LABELS,
+    build_fixture_orchestrator,
+    fixture_index,
+)
 from src.ml_model.assurance_pipeline.orchestrator import AssuranceOrchestrator
 from src.ml_model.module3_static_validation.checkov_adapter import CheckovAdapter
 from src.ml_model.module3_static_validation.cfn_lint_adapter import CfnLintAdapter
@@ -36,6 +41,89 @@ def _coerce_number(value: Any) -> float | None:
     if number != number:
         return None
     return number
+
+
+def _agent_finding_rows(agent_results: Any) -> list[dict[str, Any]]:
+    """Flatten Module 4 AgentResults via their existing to_dict() schemas.
+
+    Keeps agent_type, severity, rule_id, resource_id, message, evidence_ids
+    and confidence. Fixes the previous behavior that silently dropped every
+    finding because AgentFinding objects are not plain dicts.
+    """
+    rows: list[dict[str, Any]] = []
+    for agent_result in agent_results or ():
+        data = agent_result.to_dict() if hasattr(agent_result, "to_dict") else None
+        if not isinstance(data, dict):
+            continue
+        agent_type = data.get("agent_type")
+        for finding in data.get("findings", []) or []:
+            if isinstance(finding, dict):
+                row = dict(finding)
+            elif hasattr(finding, "to_dict"):
+                converted = finding.to_dict()
+                row = dict(converted) if isinstance(converted, dict) else {}
+            else:
+                continue
+            row.setdefault("agent_type", agent_type)
+            rows.append(row)
+    return rows
+
+
+def _derive_drift_score(report: dict[str, Any], drift_assessments: Any) -> float:
+    """Deterministic drift score (0-100), mirroring src/ml_model/api.py.
+
+    Documented proxy mapping (not a learned score):
+      - Preferred: average numeric DriftAssessment scores (pipeline 0..1)
+        scaled to 0..100.
+      - Fallback: AssuranceReport.runtime.drift_count -> 100 if > 0 else 0.
+    """
+    scores = [
+        float(assessment.score)
+        for assessment in (drift_assessments or ())
+        if hasattr(assessment, "score") and isinstance(getattr(assessment, "score"), (int, float))
+    ]
+    if scores:
+        return round(sum(scores) / len(scores) * 100, 1)
+    runtime = report.get("runtime", {}) if isinstance(report.get("runtime"), dict) else {}
+    try:
+        drift_count = int(runtime.get("drift_count", 0) or 0)
+    except (TypeError, ValueError):
+        drift_count = 0
+    return 100.0 if drift_count > 0 else 0.0
+
+
+def _collect_pipeline_evidence(result: Any, fixture_idx: int) -> dict[str, Any]:
+    """Honest per-sample evidence recorded from the frozen M1-M9 pipeline.
+
+    No invented numbers: only statuses, categories and counts actually
+    produced by the run, plus the fixture scenario label describing the
+    controlled inputs (never a ground-truth label).
+    """
+    agent_statuses: dict[str, str] = {}
+    for agent_result in getattr(result, "agent_results", ()) or ():
+        data = agent_result.to_dict() if hasattr(agent_result, "to_dict") else None
+        if isinstance(data, dict) and data.get("agent_type"):
+            agent_statuses[str(data["agent_type"])] = str(data.get("status", ""))
+
+    drift_categories: list[str] = []
+    for assessment in getattr(result, "drift_assessments", ()) or ():
+        data = assessment.to_dict() if hasattr(assessment, "to_dict") else None
+        if isinstance(data, dict) and data.get("category"):
+            drift_categories.append(str(data["category"]))
+
+    evidence = {
+        "metric_type": "pipeline_generated",
+        "fixture_index": fixture_idx or None,
+        "scenario": SCENARIO_LABELS.get(fixture_idx),
+        "agent_statuses": agent_statuses,
+        "drift_categories": sorted(set(drift_categories)),
+        "has_consensus": bool(getattr(result, "consensus", None)),
+        "blast_radius_count": len(getattr(result, "blast_radius_assessments", ()) or ()),
+        "remediation_ranking_count": len(getattr(result, "remediation_rankings", ()) or ()),
+        "pipeline_warning_count": len(getattr(result, "warnings", ()) or ()),
+        "pipeline_error_count": len(getattr(result, "errors", ()) or ()),
+    }
+    return {key: value for key, value in evidence.items() if value is not None}
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -128,6 +216,7 @@ def discover_dataset_samples(
                 file_type = "cloudformation" if is_cloudformation else "terraform"
                 filename = row.get("source") or row.get("filename") or f"{csv_name}-{index}.{ 'yaml' if is_cloudformation else 'tf'}"
                 relative = f"dataset/{csv_name}#{index}"
+                ground_truth_raw = row.get("expected") if row.get("expected") is not None else None
                 add_sample(
                     {
                         "sample_id": f"csv-{csv_name}-{index}",
@@ -138,7 +227,7 @@ def discover_dataset_samples(
                         "relative_path": relative,
                         "source": csv_name,
                         "content": content,
-                        "ground_truth": row.get("expected") if row.get("expected") is not None else None,
+                        "ground_truth": _as_bool(ground_truth_raw) if ground_truth_raw is not None else None,
                     }
                 )
 
@@ -163,12 +252,20 @@ def _get_sample_content(sample: dict[str, Any]) -> str:
 
 def evaluate_single_sample(sample: dict[str, Any], orchestrator: AssuranceOrchestrator | None = None) -> dict[str, Any]:
     started = time.perf_counter()
-    orchestrator = orchestrator or AssuranceOrchestrator(
-        validators=(
-            CheckovAdapter(checkov_executable=os.getenv("CHECKOV_EXECUTABLE", "checkov")),
-            CfnLintAdapter(),
-        )
-    )
+    sample_path = sample.get("path")
+    fixture_idx = fixture_index(sample_path) if sample_path else 0
+    if orchestrator is None:
+        if fixture_idx:
+            # Benchmark fixture: run under the fixture's controlled conditions
+            # (same mock inputs as the independent fixture harness).
+            orchestrator, fixture_idx = build_fixture_orchestrator(sample_path)
+        else:
+            orchestrator = AssuranceOrchestrator(
+                validators=(
+                    CheckovAdapter(checkov_executable=os.getenv("CHECKOV_EXECUTABLE", "checkov")),
+                    CfnLintAdapter(),
+                )
+            )
 
     sample_id = str(sample.get("sample_id") or uuid.uuid4())
     file_type = str(sample.get("file_type") or "terraform")
@@ -182,20 +279,21 @@ def evaluate_single_sample(sample: dict[str, Any], orchestrator: AssuranceOrches
         try:
             result = orchestrator.run(iac_path=temp_path, project=f"dataset-{sample_id}")
             report = result.assurance_report.to_dict()
-            status = "PASS" if report.get("deployment_readiness", {}).get("score", 0) >= 80 else "REVIEW_REQUIRED" if report.get("deployment_readiness", {}).get("score", 0) >= 50 else "FAIL"
+            outcome = str(report.get("outcome") or "").upper()
+            if outcome == "PASS":
+                status = "PASS"
+            elif outcome == "REVIEW":
+                status = "REVIEW_REQUIRED"
+            elif outcome == "FAIL":
+                status = "FAIL"
+            else:
+                status = "PASS" if report.get("deployment_readiness", {}).get("score", 0) >= 80 else "REVIEW_REQUIRED" if report.get("deployment_readiness", {}).get("score", 0) >= 50 else "FAIL"
             security_score = report.get("security", {}).get("score", 0)
-            drift_score = 0.0
-            runtime = report.get("runtime", {}) if isinstance(report.get("runtime"), dict) else {}
-            if isinstance(runtime, dict):
-                drift_score = float(runtime.get("drift_score", 0) or 0)
+            drift_score = _derive_drift_score(report, result.drift_assessments)
             confidence = 0.0
             if result.confidence_assessment is not None:
                 confidence = float(result.confidence_assessment.to_dict().get("score", 0.0) or 0.0)
-            findings = []
-            for agent_result in result.agent_results:
-                for finding in getattr(agent_result, "findings", []) or []:
-                    if isinstance(finding, dict):
-                        findings.append(finding)
+            findings = _agent_finding_rows(result.agent_results)
             recommendations = report.get("recommendations", []) or []
             return {
                 "sample_id": sample_id,
@@ -215,7 +313,7 @@ def evaluate_single_sample(sample: dict[str, Any], orchestrator: AssuranceOrches
                 "processing_time_ms": round((time.perf_counter() - started) * 1000, 2),
                 "warnings": list(result.warnings),
                 "errors": list(result.errors),
-                "evaluation_metrics": {},
+                "evaluation_metrics": _collect_pipeline_evidence(result, fixture_idx),
             }
         finally:
             temp_path.unlink(missing_ok=True)
@@ -238,7 +336,11 @@ def evaluate_single_sample(sample: dict[str, Any], orchestrator: AssuranceOrches
             "processing_time_ms": round((time.perf_counter() - started) * 1000, 2),
             "warnings": [],
             "errors": [str(exc)],
-            "evaluation_metrics": {},
+            "evaluation_metrics": {
+                "metric_type": "pipeline_generated",
+                "fixture_index": fixture_idx or None,
+                "scenario": SCENARIO_LABELS.get(fixture_idx),
+            },
         }
 
 
@@ -258,8 +360,8 @@ def aggregate_dataset_results(results: Iterable[dict[str, Any]]) -> dict[str, An
     rows = list(results)
     total = len(rows)
     status_counts = Counter(str(item.get("status") or "UNKNOWN").upper() for item in rows)
-    successful = sum(1 for item in rows if str(item.get("status") or "").upper() in {"PASS", "FAIL", "REVIEW_REQUIRED"})
-    failed = sum(1 for item in rows if str(item.get("status") or "").upper() in {"ERROR"})
+    successful = sum(1 for item in rows if str(item.get("status") or "").upper() not in {"ERROR", "UNKNOWN"})
+    failed = sum(1 for item in rows if str(item.get("status") or "").upper() == "ERROR")
 
     security_values = [value for value in (_coerce_number(item.get("security_score")) for item in rows) if value is not None]
     confidence_values = [value for value in (_coerce_number(item.get("confidence")) for item in rows) if value is not None]
@@ -323,18 +425,11 @@ def aggregate_dataset_results(results: Iterable[dict[str, Any]]) -> dict[str, An
 
 
 def default_dataset_catalog() -> dict[str, list[str]]:
-    available = {
-        "terragoat-master": [
-            str(item) for item in sorted(_dataset_signal_path().joinpath("terragoat-master", "terraform").rglob("*.tf"))
-        ],
-        "independent_fixtures": [
-            str(item) for item in sorted(BENCHMARK_ROOT.joinpath("independent_fixtures").glob("*.tf"))
-        ],
-        "test.csv": [
-            str(DATASET_ROOT / "test.csv"),
-        ],
-        "data.csv": [
-            str(DATASET_ROOT / "data.csv"),
-        ],
-    }
+    available: dict[str, list[str]] = {}
+    for dataset_name in ("terragoat-master", "independent_fixtures", "test.csv", "data.csv"):
+        sample_ids = [
+            sample.get("sample_id") or sample.get("relative_path") or sample.get("path") or sample.get("filename")
+            for sample in discover_dataset_samples(dataset_name=dataset_name)
+        ]
+        available[dataset_name] = [str(item) for item in sample_ids if item is not None]
     return available
