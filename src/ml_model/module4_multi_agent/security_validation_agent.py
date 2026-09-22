@@ -50,6 +50,11 @@ class SecurityValidationAgent(BaseAgent):
         "CHECKOV",
         "CHECKOV_TERRAFORM",
         "CHECKOV-CHECK",
+        # Built-in deterministic Module 3 security checks (builtin_security_adapter.py).
+        # They are security findings from the uploaded IaC, produced when the
+        # optional Checkov binary is unavailable, so the Security Agent must
+        # not silently drop them.
+        "IAC_BUILTIN",
     }
 
     def validate_input(self, *args, **kwargs) -> None:

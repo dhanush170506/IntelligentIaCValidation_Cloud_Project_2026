@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
 
 from src.ml_model.assurance_pipeline.orchestrator import AssuranceOrchestrator
+from src.ml_model.module3_static_validation.builtin_security_adapter import BuiltinSecurityAdapter
 from src.ml_model.module3_static_validation.checkov_adapter import CheckovAdapter
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,35 @@ app = FastAPI(title="ML Assurance API", version="1.0.0")
 # test in test_end_to_end.py) so the Security Agent receives real findings.
 # CHECKOV_EXECUTABLE lets deployments point at a specific CLI (needed on
 # Windows where the pip shim is checkov.cmd and PATH lookup is unreliable);
-# default is the plain "checkov" name. The orchestrator degrades gracefully
-# to a warning if the executable cannot be found.
+# default is the plain "checkov" name.
+#
+# Checkov is OPTIONAL on this machine. If its executable is missing, every
+# upload previously degraded to "Module 3 validator unavailable" and the
+# pipeline ran with zero static findings, making all uploads produce
+# identical reports. AvailabilityProbe delegates to Checkov while it works
+# and falls back to the built-in deterministic IaC security adapter
+# (module3_static_validation/builtin_security_adapter.py) otherwise — no
+# scores are invented anywhere; findings still come from the uploaded IaC.
+class _AvailabilityProbe:
+    """Prefer Checkov; fall back to the built-in IaC security checks."""
+
+    def __init__(self) -> None:
+        self._primary = CheckovAdapter(checkov_executable=os.getenv("CHECKOV_EXECUTABLE", "checkov"))
+        self._fallback = BuiltinSecurityAdapter()
+        self._use_fallback = False
+
+    def validate(self, path):
+        if self._use_fallback:
+            return self._fallback.validate(path)
+        try:
+            return self._primary.validate(path)
+        except Exception:
+            self._use_fallback = True  # Checkov is not usable on this host
+            return self._fallback.validate(path)
+
+
 orchestrator = AssuranceOrchestrator(
-    validators=(CheckovAdapter(checkov_executable=os.getenv("CHECKOV_EXECUTABLE", "checkov")),)
+    validators=(_AvailabilityProbe(),)
 )
 
 
